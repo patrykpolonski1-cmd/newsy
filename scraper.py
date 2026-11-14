@@ -25,7 +25,6 @@ def load_history():
 
 def save_history(history):
   with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-    # Trzymamy ostatnie 300 linków, żeby plik nie puchł w nieskończoność
     json.dump(history[-300:], f, ensure_ascii=False, indent=2)
 
 
@@ -48,18 +47,20 @@ def get_soup(url):
 
 
 def check_yle():
+  # Yle: strona tagu Mäkihyppy
   soup = get_soup("https://yle.fi/t/18-206418/fi")
   if not soup:
     return []
   articles = []
   for a in soup.find_all("a", href=re.compile(r"^/a/74-\d+")):
     title = a.get_text(strip=True)
-    if len(title) > 15:
+    if len(title) > 10:
       articles.append(("Yle.fi (FIN)", title, "https://yle.fi" + a["href"]))
   return articles
 
 
 def check_fisi():
+  # FISI: sekcja Salto
   soup = get_soup("https://fisi.org/salto/")
   if not soup:
     return []
@@ -68,12 +69,13 @@ def check_fisi():
     a = h.find("a", href=True)
     if a and "fisi.org" in a["href"]:
       title = a.get_text(strip=True)
-      if len(title) > 15:
+      if len(title) > 10:
         articles.append(("FISI (ITA)", title, a["href"]))
   return articles
 
 
 def check_blick():
+  # Blick: sekcja Skispringen
   soup = get_soup("https://www.blick.ch/sport/wintersport/skispringen/")
   if not soup:
     return []
@@ -82,7 +84,7 @@ def check_blick():
       "a", href=re.compile(r"/sport/wintersport/skispringen/.+-id\d+\.html")
   ):
     title = a.get_text(strip=True)
-    if len(title) > 20:
+    if len(title) > 15:
       url = (
           a["href"]
           if a["href"].startswith("http")
@@ -93,13 +95,14 @@ def check_blick():
 
 
 def check_sport_de():
+  # Sport.de: magazyn skoków
   soup = get_soup("https://www.sport.de/skispringen/magazin/")
   if not soup:
     return []
   articles = []
   for a in soup.find_all("a", href=re.compile(r"/news/ne\d+/")):
     title = a.get_text(strip=True)
-    if len(title) > 15:
+    if len(title) > 10:
       url = (
           a["href"]
           if a["href"].startswith("http")
@@ -110,6 +113,7 @@ def check_sport_de():
 
 
 def check_skoky():
+  # Skoky.net
   soup = get_soup("https://www.skoky.net/")
   if not soup:
     return []
@@ -118,7 +122,7 @@ def check_skoky():
     a = h.find("a", href=True)
     if a:
       title = a.get_text(strip=True)
-      if len(title) > 15:
+      if len(title) > 10:
         url = (
             a["href"]
             if a["href"].startswith("http")
@@ -129,23 +133,15 @@ def check_skoky():
 
 
 def check_siol():
+  # Siol.net: bierzemy wszystko z podstrony zimowej bez filtrowania słów kluczowych
   soup = get_soup("https://siol.net/sportal/zimski-sporti")
   if not soup:
     return []
   articles = []
-  keywords = [
-      "skok",
-      "polet",
-      "prevc",
-      "lanišek",
-      "zajc",
-      "kos",
-      "planica",
-      "skakal",
-  ]
   for a in soup.find_all("a", href=re.compile(r"/sportal/zimski-sporti/.+")):
     title = a.get_text(strip=True)
-    if len(title) > 20 and any(kw in title.lower() for kw in keywords):
+    # Ignorujemy zbyt krótkie napisy (np. nazwy kategorii)
+    if len(title) > 20 and not title.lower().startswith("zimski sporti"):
       url = (
           a["href"]
           if a["href"].startswith("http")
@@ -157,7 +153,6 @@ def check_siol():
 
 def main():
   history = load_history()
-  # Pierwsze uruchomienie: zapisuje obecne artykuły bez spamowania Discorda
   is_first_run = len(history) == 0
 
   all_found = []
@@ -168,7 +163,6 @@ def main():
   all_found.extend(check_skoky())
   all_found.extend(check_siol())
 
-  # Usuwamy duplikaty z tej samej iteracji
   unique_articles = {}
   for source, title, url in all_found:
     if url not in unique_articles:

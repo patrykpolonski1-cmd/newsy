@@ -20,8 +20,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Zainstaluj biblioteki
-        run: pip install requests beautifulsoup4 feedparser
+      - name: Zainstaluj biblioteki i przeglądarkę
+        run: |
+          pip install requests beautifulsoup4 feedparser playwright
+          playwright install chromium
 
       - name: Uruchom radar
         env:

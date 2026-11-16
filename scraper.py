@@ -19,7 +19,7 @@ def load_history():
 
 def save_history(history):
   with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-    json.dump(history[-2500:], f, ensure_ascii=False, indent=2)
+    json.dump(history[-3000:], f, ensure_ascii=False, indent=2)
 
 
 def send_discord(source, title, url):
@@ -39,6 +39,8 @@ def accept_cookies(page):
       "Akzeptieren",
       "Zustimmen",
       "Accept all",
+      "Sprejmi vse",
+      "Accetta tutto",
   ]
   for frame in [page] + page.frames:
     for text in button_texts:
@@ -48,16 +50,16 @@ def accept_cookies(page):
         ).first
         if btn.is_visible(timeout=400):
           btn.click(timeout=1000)
-          page.wait_for_timeout(2000)
+          page.wait_for_timeout(1500)
           return
       except Exception:
         pass
 
 
-def fetch_html_playwright(page, url, wait_ms=3500):
+def fetch_html_playwright(page, url, wait_ms=3000):
   try:
     page.goto(url, wait_until="domcontentloaded", timeout=30000)
-    page.wait_for_timeout(1500)
+    page.wait_for_timeout(1200)
     accept_cookies(page)
     page.mouse.wheel(0, 1200)
     page.wait_for_timeout(wait_ms)
@@ -90,7 +92,6 @@ def check_blick(page):
   )
   articles = []
   if soup:
-    # Nowy format Blicka: /sport/wintersport/skispringen/tytul-artykulu/z4t3rfy
     for a in soup.find_all(
         "a",
         href=re.compile(r"/sport/wintersport/skispringen/[^/]+/[a-z0-9]+$"),
@@ -143,40 +144,35 @@ def check_krone(page):
   soup = fetch_html_playwright(page, "https://www.krone.at/ski-nordisch")
   articles = []
   if soup:
-    for a in soup.find_all("a", href=re.compile(r"krone\.at/\d+|^/\d+")):
+    # Usuwamy panele boczne, nawigację i stopkę, skąd brały się newsy o piłce nożnej i boksie
+    for tag in soup.find_all(["aside", "nav", "footer"]):
+      tag.decompose()
+    for sidebar in soup.find_all(
+        class_=re.compile(r"sidebar|most-read|meistgelesen|widget|footer", re.I)
+    ):
+      sidebar.decompose()
+
+    # Szukamy wyłącznie artykułów w głównej liście kategorii Ski Nordisch
+    for article_box in soup.find_all(["article", "div"], class_=re.compile(r"article|teaser|story|box", re.I)):
+      a = article_box.find("a", href=re.compile(r"krone\.at/\d+|^/\d+"))
+      if not a:
+        continue
+      box_text = article_box.get_text(" ", strip=True).lower()
+      # Pomijamy boksy, które nie są z narciarstwa klasycznego / zimowego
+      if any(bad in box_text for bad in ["fußball", "bundesliga", "boxen", "tennis", "formel 1", "eishockey"]):
+        continue
       href = a["href"]
       title = a.get_text(" ", strip=True)
+      if len(title) < 18:
+        h = article_box.find(["h1", "h2", "h3", "h4"])
+        if h:
+          title = h.get_text(" ", strip=True)
       if len(title) > 18:
         url = (
             href if href.startswith("http") else "https://www.krone.at" + href
         )
         articles.append(("Krone.at (AUT)", title, url))
   print(f"✅ [Krone.at] Znaleziono: {len(articles)}")
-  return articles
-
-
-def check_sport_de(page):
-  soup = fetch_html_playwright(
-      page, "https://www.sport.de/wintersport/magazin/"
-  )
-  articles = []
-  if soup:
-    # Format linków Sport.de: /news/ne17346602/tytul-artykulu/
-    for a in soup.find_all("a", href=re.compile(r"/news/ne\d+/")):
-      href = a["href"]
-      url = href if href.startswith("http") else "https://www.sport.de" + href
-      title = a.get_text(" ", strip=True)
-      if len(title) < 15:
-        title = a.get("title") or a.get("aria-label") or ""
-      if len(title) < 15:
-        parent = a.find_parent(["article", "div", "li"])
-        if parent:
-          heading = parent.find(["h1", "h2", "h3", "h4"])
-          if heading:
-            title = heading.get_text(" ", strip=True)
-      if len(title) > 15:
-        articles.append(("Sport.de (GER)", title, url))
-  print(f"✅ [Sport.de] Znaleziono: {len(articles)}")
   return articles
 
 
@@ -222,6 +218,127 @@ def check_skoky(page):
   return articles
 
 
+def check_swissski(page):
+  soup = fetch_html_playwright(page, "https://www.swiss-ski.ch/skispringen/")
+  articles = []
+  if soup:
+    for tag in soup.find_all(["nav", "footer"]):
+      tag.decompose()
+    for a in soup.find_all("a", href=True):
+      href = a["href"]
+      title = a.get_text(" ", strip=True)
+      if len(title) < 18:
+        parent = a.find_parent(["article", "div", "li"])
+        if parent:
+          h = parent.find(["h1", "h2", "h3", "h4"])
+          if h:
+            title = h.get_text(" ", strip=True)
+      if (
+          ("/news/" in href or "/skispringen/" in href)
+          and len(title) > 18
+          and not href.rstrip("/").endswith("/skispringen")
+      ):
+        url = (
+            href if href.startswith("http") else "https://www.swiss-ski.ch" + href
+        )
+        articles.append(("Swiss-Ski (SUI)", title, url))
+  print(f"✅ [Swiss-Ski] Znaleziono: {len(articles)}")
+  return articles
+
+
+def check_fisi(page):
+  articles = []
+  # Najpierw sprawdzamy RSS kategorii Salto
+  try:
+    feed = feedparser.parse("https://www.fisi.org/categoria/salto/feed/")
+    for entry in feed.entries:
+      if entry.get("title") and entry.get("link"):
+        articles.append(
+            ("FISI (ITA)", entry.title.strip(), entry.link.strip())
+        )
+  except Exception:
+    pass
+
+  # Dodatkowo skanujemy samą stronę kategorii Salto
+  soup = fetch_html_playwright(page, "https://www.fisi.org/categoria/salto/")
+  if soup:
+    for tag in soup.find_all(["nav", "footer"]):
+      tag.decompose()
+    for h in soup.find_all(["h2", "h3", "h4"]):
+      a = h.find("a", href=True)
+      if a and "fisi.org/" in a["href"]:
+        title = a.get_text(" ", strip=True)
+        if len(title) > 15:
+          articles.append(("FISI (ITA)", title, a["href"]))
+  print(f"✅ [FISI] Znaleziono: {len(articles)}")
+  return articles
+
+
+def check_usaskijumping(page):
+  articles = []
+  try:
+    feed = feedparser.parse("https://usaskijumping.com/feed/")
+    for entry in feed.entries:
+      if entry.get("title") and entry.get("link"):
+        articles.append(
+            ("USA Ski Jumping (USA)", entry.title.strip(), entry.link.strip())
+        )
+  except Exception:
+    pass
+
+  soup = fetch_html_playwright(page, "https://usaskijumping.com")
+  if soup:
+    for tag in soup.find_all(["nav", "footer"]):
+      tag.decompose()
+    for h in soup.find_all(["h2", "h3", "h4"]):
+      a = h.find("a", href=True)
+      if a and "usaskijumping.com/" in a["href"]:
+        title = a.get_text(" ", strip=True)
+        if len(title) > 15:
+          articles.append(("USA Ski Jumping (USA)", title, a["href"]))
+  print(f"✅ [USA Ski Jumping] Znaleziono: {len(articles)}")
+  return articles
+
+
+def check_delo(page):
+  keywords = [
+      "prevc",
+      "smučarski skoki",
+      "skakalec",
+      "zajc",
+      "lanišek",
+      "oblak",
+      "jančar",
+      "kos",
+      "pertile",
+  ]
+  soup = fetch_html_playwright(page, "https://www.delo.si/sport/zimski-sporti")
+  articles = []
+  if soup:
+    for tag in soup.find_all(["nav", "footer"]):
+      tag.decompose()
+    for a in soup.find_all("a", href=re.compile(r"/sport/zimski-sporti/.+")):
+      href = a["href"]
+      url = href if href.startswith("http") else "https://www.delo.si" + href
+      title = a.get_text(" ", strip=True)
+      parent = a.find_parent(["article", "div", "li"])
+      context_text = (
+          parent.get_text(" ", strip=True).lower() if parent else title.lower()
+      )
+      if len(title) < 15 and parent:
+        h = parent.find(["h1", "h2", "h3", "h4"])
+        if h:
+          title = h.get_text(" ", strip=True)
+
+      # Sprawdzamy słowa kluczowe w całym kafelku artykułu (tytuł + opis + link)
+      if len(title) > 15 and any(
+          kw in context_text or kw in url.lower() for kw in keywords
+      ):
+        articles.append(("Delo.si (SLO)", title, url))
+  print(f"✅ [Delo.si] Znaleziono: {len(articles)}")
+  return articles
+
+
 def main():
   history = load_history()
   is_first_run = len(history) == 0
@@ -244,9 +361,12 @@ def main():
     all_found.extend(check_blick(page))
     all_found.extend(check_sloski(page))
     all_found.extend(check_krone(page))
-    all_found.extend(check_sport_de(page))
     all_found.extend(check_siol(page))
     all_found.extend(check_skoky(page))
+    all_found.extend(check_swissski(page))
+    all_found.extend(check_fisi(page))
+    all_found.extend(check_usaskijumping(page))
+    all_found.extend(check_delo(page))
 
     browser.close()
 

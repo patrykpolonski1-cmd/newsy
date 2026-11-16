@@ -22,7 +22,7 @@ jobs:
 
       - name: Zainstaluj biblioteki i przeglądarkę
         run: |
-          pip install requests beautifulsoup4 feedparser playwright
+          pip install requests beautifulsoup4 feedparser playwright deep-translator
           playwright install chromium
 
       - name: Uruchom radar

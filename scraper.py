@@ -31,9 +31,10 @@ def send_discord(source, title, url):
 
 
 def accept_cookies(page):
-  # Klika przyciski RODO zarówno na głównej stronie, jak i w ramkach iframe (Sourcepoint/Usercentrics)
   button_texts = [
       "Alle akzeptieren",
+      "Akzeptieren und weiter",
+      "Zustimmen und weiter",
       "Einverstanden",
       "Akzeptieren",
       "Zustimmen",
@@ -45,7 +46,7 @@ def accept_cookies(page):
         btn = frame.get_by_role(
             "button", name=re.compile(text, re.IGNORECASE)
         ).first
-        if btn.is_visible(timeout=500):
+        if btn.is_visible(timeout=400):
           btn.click(timeout=1000)
           page.wait_for_timeout(2000)
           return
@@ -53,11 +54,12 @@ def accept_cookies(page):
         pass
 
 
-def fetch_html_playwright(page, url, wait_ms=3000):
+def fetch_html_playwright(page, url, wait_ms=3500):
   try:
     page.goto(url, wait_until="domcontentloaded", timeout=30000)
     page.wait_for_timeout(1500)
     accept_cookies(page)
+    page.mouse.wheel(0, 1200)
     page.wait_for_timeout(wait_ms)
     return BeautifulSoup(page.content(), "html.parser")
   except Exception as e:
@@ -88,13 +90,23 @@ def check_blick(page):
   )
   articles = []
   if soup:
-    for a in soup.find_all("a", href=re.compile(r"-id\d+\.html")):
+    # Nowy format Blicka: /sport/wintersport/skispringen/tytul-artykulu/z4t3rfy
+    for a in soup.find_all(
+        "a",
+        href=re.compile(r"/sport/wintersport/skispringen/[^/]+/[a-z0-9]+$"),
+    ):
       href = a["href"]
+      url = href if href.startswith("http") else "https://www.blick.ch" + href
       title = a.get_text(" ", strip=True)
+      if len(title) < 15:
+        title = a.get("title") or a.get("aria-label") or ""
+      if len(title) < 15:
+        parent = a.find_parent(["article", "div", "li"])
+        if parent:
+          heading = parent.find(["h1", "h2", "h3", "h4"])
+          if heading:
+            title = heading.get_text(" ", strip=True)
       if len(title) > 15:
-        url = (
-            href if href.startswith("http") else "https://www.blick.ch" + href
-        )
         articles.append(("Blick (SUI)", title, url))
   print(f"✅ [Blick.ch] Znaleziono: {len(articles)}")
   return articles
@@ -144,23 +156,25 @@ def check_krone(page):
 
 
 def check_sport_de(page):
-  # Zaktualizowany adres z Twojego zrzutu ekranu: sport.de/wintersport/magazin/
   soup = fetch_html_playwright(
       page, "https://www.sport.de/wintersport/magazin/"
   )
   articles = []
   if soup:
-    for a in soup.find_all("a", href=True):
+    # Format linków Sport.de: /news/ne17346602/tytul-artykulu/
+    for a in soup.find_all("a", href=re.compile(r"/news/ne\d+/")):
       href = a["href"]
+      url = href if href.startswith("http") else "https://www.sport.de" + href
       title = a.get_text(" ", strip=True)
-      # Artykuły na sport.de mają w linku /news/ lub kończą się ID artykułu
-      if (
-          ("/news/" in href or re.search(r"-\d{5,}/?$", href))
-          and len(title) > 18
-      ):
-        url = (
-            href if href.startswith("http") else "https://www.sport.de" + href
-        )
+      if len(title) < 15:
+        title = a.get("title") or a.get("aria-label") or ""
+      if len(title) < 15:
+        parent = a.find_parent(["article", "div", "li"])
+        if parent:
+          heading = parent.find(["h1", "h2", "h3", "h4"])
+          if heading:
+            title = heading.get_text(" ", strip=True)
+      if len(title) > 15:
         articles.append(("Sport.de (GER)", title, url))
   print(f"✅ [Sport.de] Znaleziono: {len(articles)}")
   return articles

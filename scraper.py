@@ -301,6 +301,39 @@ def check_delo(page):
   return articles
 
 
+def check_dsv(page):
+  soup = fetch_html_playwright(page, "https://www.deutscherskiverband.de/skisprung")
+  articles = []
+  if soup:
+    for tag in soup.find_all(["nav", "footer"]):
+      tag.decompose()
+    for a in soup.find_all("a", href=True):
+      href = a["href"]
+      # DSV publikuje newsy w ścieżkach /detail_... lub /news... lub z ID artykułu
+      if not any(
+          part in href
+          for part in ["/detail_", "/news", "/skisprung/", "/aktuelles"]
+      ):
+        continue
+      if href.rstrip("/").endswith("/skisprung"):
+        continue
+      title = a.get_text(" ", strip=True)
+      parent = a.find_parent(["article", "div", "li"])
+      if len(title) < 18 and parent:
+        h = parent.find(["h1", "h2", "h3", "h4"])
+        if h:
+          title = h.get_text(" ", strip=True)
+      if len(title) > 18:
+        url = (
+            href
+            if href.startswith("http")
+            else "https://www.deutscherskiverband.de/" + href.lstrip("/")
+        )
+        articles.append(("DSV (GER)", title, url))
+  print(f"✅ [DSV (GER)] Znaleziono: {len(articles)}")
+  return articles
+
+
 def main():
   history = load_history()
   is_first_run = len(history) == 0
@@ -328,6 +361,7 @@ def main():
     all_found.extend(check_fisi(page))
     all_found.extend(check_usaskijumping(page))
     all_found.extend(check_delo(page))
+    all_found.extend(check_dsv(page))
 
     browser.close()
 

@@ -3,21 +3,11 @@ import os
 import re
 from bs4 import BeautifulSoup
 import feedparser
+from playwright.sync_api import sync_playwright
 import requests
 
 WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK")
 HISTORY_FILE = "history.json"
-
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-    ),
-    "Accept": (
-        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    ),
-    "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7",
-}
 
 
 def load_history():
@@ -40,103 +30,151 @@ def send_discord(source, title, url):
   requests.post(WEBHOOK_URL, json=payload, timeout=10)
 
 
-def get_rss(source_name, rss_url, url_must_contain=None):
-  articles = []
+def fetch_html_playwright(page, url, wait_ms=3000):
   try:
-    res = requests.get(rss_url, headers=HEADERS, timeout=15)
-    res.raise_for_status()
-    feed = feedparser.parse(res.content)
-    for entry in feed.entries:
-      title = entry.get("title", "").strip()
-      link = entry.get("link", "").strip()
-      if not title or not link:
-        continue
-      if url_must_contain and url_must_contain not in link:
-        continue
-      articles.append((source_name, title, link))
+    page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    page.wait_for_timeout(wait_ms)
+    return BeautifulSoup(page.content(), "html.parser")
   except Exception as e:
-    print(f"❌ Błąd {source_name}: {e}")
-  print(f"✅ [{source_name}] Znaleziono: {len(articles)}")
-  return articles
-
-
-def get_soup(url):
-  try:
-    res = requests.get(url, headers=HEADERS, timeout=15)
-    res.raise_for_status()
-    return BeautifulSoup(res.text, "html.parser")
-  except Exception as e:
-    print(f"❌ Błąd pobierania {url}: {e}")
+    print(f"❌ Błąd Playwright dla {url}: {e}")
     return None
 
 
 def check_yle():
-  # Cała kategoria Mäkihyppy (tag 18-206418)
-  return get_rss(
-      "Yle.fi (FIN)",
-      "https://feeds.yle.fi/uutiset/v1/recent.rss?concepts=18-206418",
-  )
+  articles = []
+  try:
+    feed = feedparser.parse(
+        "https://feeds.yle.fi/uutiset/v1/recent.rss?concepts=18-206418"
+    )
+    for entry in feed.entries:
+      if entry.get("title") and entry.get("link"):
+        articles.append(
+            ("Yle.fi (FIN)", entry.title.strip(), entry.link.strip())
+        )
+  except Exception as e:
+    print(f"❌ Yle błąd: {e}")
+  print(f"✅ [Yle.fi] Znaleziono: {len(articles)}")
+  return articles
 
 
-def check_blick():
-  # Cały dział /sport/wintersport/skispringen/ (filtrowane wyłącznie po ścieżce URL działu)
-  articles = get_rss(
-      "Blick (SUI)",
-      "https://www.blick.ch/sport/wintersport/rss.xml",
-      url_must_contain="/skispringen/",
+def check_blick(page):
+  soup = fetch_html_playwright(
+      page, "https://www.blick.ch/sport/wintersport/skispringen"
   )
-  # Zapasowo sprawdzamy też bezpośrednio HTML strony działu
-  soup = get_soup("https://www.blick.ch/sport/wintersport/skispringen")
+  articles = []
   if soup:
-    for a in soup.find_all("a", href=re.compile(r"/skispringen/.+-id\d+\.html")):
+    for a in soup.find_all("a", href=re.compile(r"-id\d+\.html")):
       href = a["href"]
+      if "skispringen" not in href and "wintersport" not in href:
+        continue
       title = a.get_text(" ", strip=True)
       if len(title) > 15:
         url = (
             href if href.startswith("http") else "https://www.blick.ch" + href
         )
         articles.append(("Blick (SUI)", title, url))
+  print(f"✅ [Blick.ch] Znaleziono: {len(articles)}")
   return articles
 
 
-def check_sloski():
-  # Cały kanał Słoweńskiego Związku Narciarskiego (Sloski.si)
-  return get_rss("Sloski.si (SLO)", "https://www.sloski.si/feed/")
-
-
-def check_krone():
-  # Cały dział Ski Nordisch na Krone.at
-  return get_rss("Krone.at (AUT)", "https://www.krone.at/ski-nordisch/rss")
-
-
-def check_sport_de():
-  # Cały dział Skispringen na Sport.de
-  return get_rss("Sport.de (GER)", "https://www.sport.de/rss/skispringen/")
-
-
-def check_siol():
-  # Cały dział Skoki na Siol.net
-  soup = get_soup("https://siol.net/sportal/zimski-sporti/skoki")
-  if not soup:
-    print("❌ [Siol.net (SLO)] Błąd połączenia")
-    return []
+def check_sloski(page):
+  soup = fetch_html_playwright(page, "https://www.sloski.si/")
   articles = []
-  for a in soup.find_all("a", href=re.compile(r"/sportal/zimski-sporti/.+")):
-    title = a.get_text(" ", strip=True)
-    if len(title) > 20 and not title.lower().startswith("zimski sporti"):
-      url = (
-          a["href"]
-          if a["href"].startswith("http")
-          else "https://siol.net" + a["href"]
-      )
-      articles.append(("Siol.net (SLO)", title, url))
-  print(f"✅ [Siol.net (SLO)] Znaleziono: {len(articles)}")
+  if soup:
+    for a in soup.find_all("a", href=True):
+      href = a["href"]
+      title = a.get_text(" ", strip=True)
+      # Wyłapujemy wpisy aktualności (pomijamy menu i krótkie przyciski)
+      if (
+          "sloski.si/" in href
+          and len(title) > 22
+          and not any(
+              x in href
+              for x in [
+                  "/wp-",
+                  "/category/",
+                  "/tag/",
+                  "/kontakt",
+                  "/o-nas",
+                  "/panoge",
+              ]
+          )
+      ):
+        articles.append(("Sloski.si (SLO)", title, href))
+  print(f"✅ [Sloski.si] Znaleziono: {len(articles)}")
   return articles
 
 
-def check_skoky():
-  # Cały portal Skoky.net
-  return get_rss("Skoky.net (CZE)", "https://www.skoky.net/feed/")
+def check_krone(page):
+  soup = fetch_html_playwright(page, "https://www.krone.at/ski-nordisch")
+  articles = []
+  if soup:
+    for a in soup.find_all("a", href=re.compile(r"^/\d+$")):
+      title = a.get_text(" ", strip=True)
+      if len(title) > 18:
+        articles.append(
+            ("Krone.at (AUT)", title, "https://www.krone.at" + a["href"])
+        )
+  print(f"✅ [Krone.at] Znaleziono: {len(articles)}")
+  return articles
+
+
+def check_sport_de(page):
+  soup = fetch_html_playwright(page, "https://www.sport.de/skispringen/magazin/")
+  articles = []
+  if soup:
+    for a in soup.find_all("a", href=re.compile(r"/news/ne\d+/")):
+      title = a.get_text(" ", strip=True)
+      if len(title) > 15:
+        href = a["href"]
+        url = (
+            href if href.startswith("http") else "https://www.sport.de" + href
+        )
+        articles.append(("Sport.de (GER)", title, url))
+  print(f"✅ [Sport.de] Znaleziono: {len(articles)}")
+  return articles
+
+
+def check_siol(page):
+  soup = fetch_html_playwright(page, "https://siol.net/sportal/zimski-sporti/skoki")
+  articles = []
+  if soup:
+    for a in soup.find_all("a", href=re.compile(r"/sportal/zimski-sporti/.+")):
+      title = a.get_text(" ", strip=True)
+      if len(title) > 20 and not title.lower().startswith("zimski sporti"):
+        href = a["href"]
+        url = href if href.startswith("http") else "https://siol.net" + href
+        articles.append(("Siol.net (SLO)", title, url))
+  print(f"✅ [Siol.net] Znaleziono: {len(articles)}")
+  return articles
+
+
+def check_skoky(page):
+  soup = fetch_html_playwright(page, "https://www.skoky.net/")
+  articles = []
+  if soup:
+    for a in soup.find_all("a", href=True):
+      href = a["href"]
+      title = a.get_text(" ", strip=True)
+      if (
+          "skoky.net/" in href
+          and len(title) > 18
+          and not any(
+              x in href
+              for x in [
+                  "/kategorie/",
+                  "/tag/",
+                  "/author/",
+                  "/kontakt",
+                  "/redakce",
+                  "/kalendar",
+                  "#",
+              ]
+          )
+      ):
+        articles.append(("Skoky.net (CZE)", title, href))
+  print(f"✅ [Skoky.net] Znaleziono: {len(articles)}")
+  return articles
 
 
 def main():
@@ -145,16 +183,29 @@ def main():
 
   all_found = []
   all_found.extend(check_yle())
-  all_found.extend(check_blick())
-  all_found.extend(check_sloski())
-  all_found.extend(check_krone())
-  all_found.extend(check_sport_de())
-  all_found.extend(check_siol())
-  all_found.extend(check_skoky())
+
+  with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    context = browser.new_context(
+        user_agent=(
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
+        ),
+        viewport={"width": 1280, "height": 800},
+    )
+    page = context.new_page()
+
+    all_found.extend(check_blick(page))
+    all_found.extend(check_sloski(page))
+    all_found.extend(check_krone(page))
+    all_found.extend(check_sport_de(page))
+    all_found.extend(check_siol(page))
+    all_found.extend(check_skoky(page))
+
+    browser.close()
 
   unique_articles = {}
   for source, title, url in all_found:
-    # Usuwamy parametry śledzące (?utm_...) z linków RSS, żeby nie dublowały się w historii
     clean_url = url.split("?")[0] if "yle.fi" not in url else url
     if clean_url not in unique_articles:
       unique_articles[clean_url] = (source, title)

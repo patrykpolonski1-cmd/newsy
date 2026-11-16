@@ -30,9 +30,34 @@ def send_discord(source, title, url):
   requests.post(WEBHOOK_URL, json=payload, timeout=10)
 
 
+def accept_cookies(page):
+  # Klika przyciski RODO zarówno na głównej stronie, jak i w ramkach iframe (Sourcepoint/Usercentrics)
+  button_texts = [
+      "Alle akzeptieren",
+      "Einverstanden",
+      "Akzeptieren",
+      "Zustimmen",
+      "Accept all",
+  ]
+  for frame in [page] + page.frames:
+    for text in button_texts:
+      try:
+        btn = frame.get_by_role(
+            "button", name=re.compile(text, re.IGNORECASE)
+        ).first
+        if btn.is_visible(timeout=500):
+          btn.click(timeout=1000)
+          page.wait_for_timeout(2000)
+          return
+      except Exception:
+        pass
+
+
 def fetch_html_playwright(page, url, wait_ms=3000):
   try:
     page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    page.wait_for_timeout(1500)
+    accept_cookies(page)
     page.wait_for_timeout(wait_ms)
     return BeautifulSoup(page.content(), "html.parser")
   except Exception as e:
@@ -65,8 +90,6 @@ def check_blick(page):
   if soup:
     for a in soup.find_all("a", href=re.compile(r"-id\d+\.html")):
       href = a["href"]
-      if "skispringen" not in href and "wintersport" not in href:
-        continue
       title = a.get_text(" ", strip=True)
       if len(title) > 15:
         url = (
@@ -84,7 +107,6 @@ def check_sloski(page):
     for a in soup.find_all("a", href=True):
       href = a["href"]
       title = a.get_text(" ", strip=True)
-      # Wyłapujemy wpisy aktualności (pomijamy menu i krótkie przyciski)
       if (
           "sloski.si/" in href
           and len(title) > 22
@@ -109,24 +131,33 @@ def check_krone(page):
   soup = fetch_html_playwright(page, "https://www.krone.at/ski-nordisch")
   articles = []
   if soup:
-    for a in soup.find_all("a", href=re.compile(r"^/\d+$")):
+    for a in soup.find_all("a", href=re.compile(r"krone\.at/\d+|^/\d+")):
+      href = a["href"]
       title = a.get_text(" ", strip=True)
       if len(title) > 18:
-        articles.append(
-            ("Krone.at (AUT)", title, "https://www.krone.at" + a["href"])
+        url = (
+            href if href.startswith("http") else "https://www.krone.at" + href
         )
+        articles.append(("Krone.at (AUT)", title, url))
   print(f"✅ [Krone.at] Znaleziono: {len(articles)}")
   return articles
 
 
 def check_sport_de(page):
-  soup = fetch_html_playwright(page, "https://www.sport.de/skispringen/magazin/")
+  # Zaktualizowany adres z Twojego zrzutu ekranu: sport.de/wintersport/magazin/
+  soup = fetch_html_playwright(
+      page, "https://www.sport.de/wintersport/magazin/"
+  )
   articles = []
   if soup:
-    for a in soup.find_all("a", href=re.compile(r"/news/ne\d+/")):
+    for a in soup.find_all("a", href=True):
+      href = a["href"]
       title = a.get_text(" ", strip=True)
-      if len(title) > 15:
-        href = a["href"]
+      # Artykuły na sport.de mają w linku /news/ lub kończą się ID artykułu
+      if (
+          ("/news/" in href or re.search(r"-\d{5,}/?$", href))
+          and len(title) > 18
+      ):
         url = (
             href if href.startswith("http") else "https://www.sport.de" + href
         )
@@ -192,6 +223,7 @@ def main():
             "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
         ),
         viewport={"width": 1280, "height": 800},
+        locale="de-DE",
     )
     page = context.new_page()
 

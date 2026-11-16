@@ -2,6 +2,7 @@ import json
 import os
 import re
 from bs4 import BeautifulSoup
+from deep_translator import GoogleTranslator
 import feedparser
 from playwright.sync_api import sync_playwright
 import requests
@@ -22,12 +23,30 @@ def save_history(history):
     json.dump(history[-3000:], f, ensure_ascii=False, indent=2)
 
 
+def translate_to_pl(text):
+  try:
+    clean_text = text.strip()[:450]
+    translated = GoogleTranslator(source="auto", target="pl").translate(
+        clean_text
+    )
+    return translated if translated else clean_text
+  except Exception as e:
+    print(f"⚠️ Błąd tłumaczenia: {e}")
+    return text
+
+
 def send_discord(source, title, url):
+  pl_title = translate_to_pl(title)
   if not WEBHOOK_URL:
-    print(f"[TEST] {source}: {title} -> {url}")
+    print(f"[TEST] {source}: {pl_title} ({title}) -> {url}")
     return
-  payload = {"content": f"📡 **{source}**\n**{title}**\n{url}"}
-  requests.post(WEBHOOK_URL, json=payload, timeout=10)
+
+  if pl_title.lower().strip() != title.lower().strip():
+    message = f"📡 **{source}**\n**{pl_title}**\n*{title}*\n{url}"
+  else:
+    message = f"📡 **{source}**\n**{title}**\n{url}"
+
+  requests.post(WEBHOOK_URL, json={"content": message}, timeout=10)
 
 
 def accept_cookies(page):
@@ -184,7 +203,6 @@ def check_skoky(page):
 
 def check_swissski(page):
   articles = []
-  # 1. Próba przez oficjalną sitemapę XML Swiss-Ski
   try:
     res = requests.get(
         "https://www.swiss-ski.ch/sitemap.xml",
@@ -214,7 +232,6 @@ def check_swissski(page):
   except Exception as e:
     print(f"❌ Swiss-Ski sitemap błąd: {e}")
 
-  # 2. Zapasowo przez Playwright + obejście Shadow DOM Usercentrics
   if not articles:
     try:
       page.goto(
@@ -376,14 +393,21 @@ def check_dsv(page):
         continue
       if href.rstrip("/").endswith("/skisprung"):
         continue
-      title = a.get_text(" ", strip=True)
-      if len(title) < 20:
+
+      title = ""
+      h = a.find(["h1", "h2", "h3", "h4"])
+      if h:
+        title = h.get_text(" ", strip=True)
+      if len(title) < 15:
         parent = a.find_parent(["article", "div", "li", "section"])
         if parent:
-          h = parent.find(["h1", "h2", "h3", "h4"])
-          if h:
-            title = h.get_text(" ", strip=True)
-      if len(title) > 22 and len(href) > 12:
+          ph = parent.find(["h1", "h2", "h3", "h4"])
+          if ph:
+            title = ph.get_text(" ", strip=True)
+      if len(title) < 15:
+        title = a.get_text(" ", strip=True)
+
+      if len(title) > 18 and len(href) > 12:
         url = (
             href
             if href.startswith("http")
@@ -428,6 +452,8 @@ def main():
 
   unique_articles = {}
   for source, title, url in all_found:
+    if "krone.at" in url.lower():
+      continue
     clean_url = url.split("?")[0] if "yle.fi" not in url else url
     if clean_url not in unique_articles:
       unique_articles[clean_url] = (source, title)

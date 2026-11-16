@@ -184,7 +184,7 @@ def check_skoky(page):
 
 def check_swissski(page):
   articles = []
-  # 1. Próba przez oficjalną sitemapę XML Swiss-Ski (omija RODO i JS, zawiera wszystkie najnowsze newsy)
+  # 1. Próba przez oficjalną sitemapę XML Swiss-Ski
   try:
     res = requests.get(
         "https://www.swiss-ski.ch/sitemap.xml",
@@ -192,7 +192,6 @@ def check_swissski(page):
         timeout=15,
     )
     if res.status_code == 200:
-      # Szukamy sub-sitemap lub bezpośrednich linków z newsami ze skoków
       sub_sitemaps = re.findall(
           r"<loc>(https://www\.swiss-ski\.ch/[^<]*sitemap[^<]*)</loc>", res.text
       )
@@ -215,7 +214,7 @@ def check_swissski(page):
   except Exception as e:
     print(f"❌ Swiss-Ski sitemap błąd: {e}")
 
-  # 2. Jeśli sitemapa nie zwróciła wyników, używamy Playwrighta z obejściem Shadow DOM Usercentrics
+  # 2. Zapasowo przez Playwright + obejście Shadow DOM Usercentrics
   if not articles:
     try:
       page.goto(
@@ -224,7 +223,6 @@ def check_swissski(page):
           timeout=35000,
       )
       page.wait_for_timeout(2000)
-      # Klikamy przycisk w Shadow DOM (#usercentrics-root) przez JS
       page.evaluate("""() => {
         const root = document.querySelector('#usercentrics-root');
         if (root && root.shadowRoot) {
@@ -392,10 +390,6 @@ def check_dsv(page):
             else "https://www.deutscherskiverband.de/" + href.lstrip("/")
         )
         articles.append(("DSV (GER)", title, url))
-
-    if not articles:
-      sample = [a.get("href") for a in soup.find_all("a", href=True)[:8]]
-      print(f"   🔎 Debug DSV linki: {sample}")
 
   print(f"✅ [DSV (GER)] Znaleziono: {len(articles)}")
   return articles

@@ -140,42 +140,6 @@ def check_sloski(page):
   return articles
 
 
-def check_krone(page):
-  soup = fetch_html_playwright(page, "https://www.krone.at/ski-nordisch")
-  articles = []
-  if soup:
-    # Usuwamy panele boczne, nawigację i stopkę, skąd brały się newsy o piłce nożnej i boksie
-    for tag in soup.find_all(["aside", "nav", "footer"]):
-      tag.decompose()
-    for sidebar in soup.find_all(
-        class_=re.compile(r"sidebar|most-read|meistgelesen|widget|footer", re.I)
-    ):
-      sidebar.decompose()
-
-    # Szukamy wyłącznie artykułów w głównej liście kategorii Ski Nordisch
-    for article_box in soup.find_all(["article", "div"], class_=re.compile(r"article|teaser|story|box", re.I)):
-      a = article_box.find("a", href=re.compile(r"krone\.at/\d+|^/\d+"))
-      if not a:
-        continue
-      box_text = article_box.get_text(" ", strip=True).lower()
-      # Pomijamy boksy, które nie są z narciarstwa klasycznego / zimowego
-      if any(bad in box_text for bad in ["fußball", "bundesliga", "boxen", "tennis", "formel 1", "eishockey"]):
-        continue
-      href = a["href"]
-      title = a.get_text(" ", strip=True)
-      if len(title) < 18:
-        h = article_box.find(["h1", "h2", "h3", "h4"])
-        if h:
-          title = h.get_text(" ", strip=True)
-      if len(title) > 18:
-        url = (
-            href if href.startswith("http") else "https://www.krone.at" + href
-        )
-        articles.append(("Krone.at (AUT)", title, url))
-  print(f"✅ [Krone.at] Znaleziono: {len(articles)}")
-  return articles
-
-
 def check_siol(page):
   soup = fetch_html_playwright(page, "https://siol.net/sportal/zimski-sporti/skoki")
   articles = []
@@ -219,27 +183,28 @@ def check_skoky(page):
 
 
 def check_swissski(page):
-  soup = fetch_html_playwright(page, "https://www.swiss-ski.ch/skispringen/")
+  soup = fetch_html_playwright(
+      page, "https://www.swiss-ski.ch/skispringen/news/"
+  )
   articles = []
   if soup:
     for tag in soup.find_all(["nav", "footer"]):
       tag.decompose()
     for a in soup.find_all("a", href=True):
       href = a["href"]
+      if "/news/" not in href or href.rstrip("/").endswith("/news"):
+        continue
       title = a.get_text(" ", strip=True)
-      if len(title) < 18:
-        parent = a.find_parent(["article", "div", "li"])
-        if parent:
-          h = parent.find(["h1", "h2", "h3", "h4"])
-          if h:
-            title = h.get_text(" ", strip=True)
-      if (
-          ("/news/" in href or "/skispringen/" in href)
-          and len(title) > 18
-          and not href.rstrip("/").endswith("/skispringen")
-      ):
+      parent = a.find_parent(["article", "div", "li"])
+      if parent:
+        h = parent.find(["h1", "h2", "h3", "h4"])
+        if h and len(h.get_text(" ", strip=True)) > 15:
+          title = h.get_text(" ", strip=True)
+      if len(title) > 15:
         url = (
-            href if href.startswith("http") else "https://www.swiss-ski.ch" + href
+            href
+            if href.startswith("http")
+            else "https://www.swiss-ski.ch" + href
         )
         articles.append(("Swiss-Ski (SUI)", title, url))
   print(f"✅ [Swiss-Ski] Znaleziono: {len(articles)}")
@@ -248,7 +213,6 @@ def check_swissski(page):
 
 def check_fisi(page):
   articles = []
-  # Najpierw sprawdzamy RSS kategorii Salto
   try:
     feed = feedparser.parse("https://www.fisi.org/categoria/salto/feed/")
     for entry in feed.entries:
@@ -259,7 +223,6 @@ def check_fisi(page):
   except Exception:
     pass
 
-  # Dodatkowo skanujemy samą stronę kategorii Salto
   soup = fetch_html_playwright(page, "https://www.fisi.org/categoria/salto/")
   if soup:
     for tag in soup.find_all(["nav", "footer"]):
@@ -330,7 +293,6 @@ def check_delo(page):
         if h:
           title = h.get_text(" ", strip=True)
 
-      # Sprawdzamy słowa kluczowe w całym kafelku artykułu (tytuł + opis + link)
       if len(title) > 15 and any(
           kw in context_text or kw in url.lower() for kw in keywords
       ):
@@ -360,7 +322,6 @@ def main():
 
     all_found.extend(check_blick(page))
     all_found.extend(check_sloski(page))
-    all_found.extend(check_krone(page))
     all_found.extend(check_siol(page))
     all_found.extend(check_skoky(page))
     all_found.extend(check_swissski(page))

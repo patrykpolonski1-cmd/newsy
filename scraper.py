@@ -56,12 +56,12 @@ def accept_cookies(page):
         pass
 
 
-def fetch_html_playwright(page, url, wait_ms=3000):
+def fetch_html_playwright(page, url, wait_ms=3500):
   try:
     page.goto(url, wait_until="domcontentloaded", timeout=30000)
-    page.wait_for_timeout(1200)
+    page.wait_for_timeout(1500)
     accept_cookies(page)
-    page.mouse.wheel(0, 1200)
+    page.mouse.wheel(0, 1500)
     page.wait_for_timeout(wait_ms)
     return BeautifulSoup(page.content(), "html.parser")
   except Exception as e:
@@ -184,29 +184,47 @@ def check_skoky(page):
 
 def check_swissski(page):
   soup = fetch_html_playwright(
-      page, "https://www.swiss-ski.ch/skispringen/news/"
+      page, "https://www.swiss-ski.ch/skispringen/news/", wait_ms=4500
   )
   articles = []
   if soup:
-    for tag in soup.find_all(["nav", "footer"]):
+    for tag in soup.find_all(["nav", "footer", "header"]):
       tag.decompose()
     for a in soup.find_all("a", href=True):
       href = a["href"]
-      if "/news/" not in href or href.rstrip("/").endswith("/news"):
+      if any(
+          bad in href
+          for bad in [
+              "facebook.com",
+              "instagram.com",
+              "youtube.com",
+              "linkedin.com",
+              "/impressum",
+              "/datenschutz",
+          ]
+      ):
+        continue
+      if href.rstrip("/").endswith(("/skispringen/news", "/skispringen")):
         continue
       title = a.get_text(" ", strip=True)
-      parent = a.find_parent(["article", "div", "li"])
-      if parent:
-        h = parent.find(["h1", "h2", "h3", "h4"])
-        if h and len(h.get_text(" ", strip=True)) > 15:
-          title = h.get_text(" ", strip=True)
-      if len(title) > 15:
+      if len(title) < 20:
+        parent = a.find_parent(["article", "div", "li", "section"])
+        if parent:
+          h = parent.find(["h1", "h2", "h3", "h4"])
+          if h:
+            title = h.get_text(" ", strip=True)
+      if len(title) > 22 and len(href) > 15:
         url = (
             href
             if href.startswith("http")
-            else "https://www.swiss-ski.ch" + href
+            else "https://www.swiss-ski.ch/" + href.lstrip("/")
         )
         articles.append(("Swiss-Ski (SUI)", title, url))
+
+    if not articles:
+      sample = [a.get("href") for a in soup.find_all("a", href=True)[:8]]
+      print(f"   🔎 Debug Swiss-Ski linki: {sample}")
+
   print(f"✅ [Swiss-Ski] Znaleziono: {len(articles)}")
   return articles
 
@@ -302,34 +320,48 @@ def check_delo(page):
 
 
 def check_dsv(page):
-  soup = fetch_html_playwright(page, "https://www.deutscherskiverband.de/skisprung")
+  soup = fetch_html_playwright(
+      page, "https://www.deutscherskiverband.de/skisprung", wait_ms=4500
+  )
   articles = []
   if soup:
-    for tag in soup.find_all(["nav", "footer"]):
+    for tag in soup.find_all(["nav", "footer", "header"]):
       tag.decompose()
     for a in soup.find_all("a", href=True):
       href = a["href"]
-      # DSV publikuje newsy w ścieżkach /detail_... lub /news... lub z ID artykułu
-      if not any(
-          part in href
-          for part in ["/detail_", "/news", "/skisprung/", "/aktuelles"]
+      if any(
+          bad in href
+          for bad in [
+              "facebook.com",
+              "instagram.com",
+              "youtube.com",
+              "/impressum",
+              "/datenschutz",
+              "mailto:",
+          ]
       ):
         continue
       if href.rstrip("/").endswith("/skisprung"):
         continue
       title = a.get_text(" ", strip=True)
-      parent = a.find_parent(["article", "div", "li"])
-      if len(title) < 18 and parent:
-        h = parent.find(["h1", "h2", "h3", "h4"])
-        if h:
-          title = h.get_text(" ", strip=True)
-      if len(title) > 18:
+      if len(title) < 20:
+        parent = a.find_parent(["article", "div", "li", "section"])
+        if parent:
+          h = parent.find(["h1", "h2", "h3", "h4"])
+          if h:
+            title = h.get_text(" ", strip=True)
+      if len(title) > 22 and len(href) > 12:
         url = (
             href
             if href.startswith("http")
             else "https://www.deutscherskiverband.de/" + href.lstrip("/")
         )
         articles.append(("DSV (GER)", title, url))
+
+    if not articles:
+      sample = [a.get("href") for a in soup.find_all("a", href=True)[:8]]
+      print(f"   🔎 Debug DSV linki: {sample}")
+
   print(f"✅ [DSV (GER)] Znaleziono: {len(articles)}")
   return articles
 

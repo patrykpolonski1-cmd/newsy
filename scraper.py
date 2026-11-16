@@ -183,47 +183,82 @@ def check_skoky(page):
 
 
 def check_swissski(page):
-  soup = fetch_html_playwright(
-      page, "https://www.swiss-ski.ch/skispringen/news/", wait_ms=4500
-  )
   articles = []
-  if soup:
-    for tag in soup.find_all(["nav", "footer", "header"]):
-      tag.decompose()
-    for a in soup.find_all("a", href=True):
-      href = a["href"]
-      if any(
-          bad in href
-          for bad in [
-              "facebook.com",
-              "instagram.com",
-              "youtube.com",
-              "linkedin.com",
-              "/impressum",
-              "/datenschutz",
-          ]
-      ):
-        continue
-      if href.rstrip("/").endswith(("/skispringen/news", "/skispringen")):
-        continue
-      title = a.get_text(" ", strip=True)
-      if len(title) < 20:
-        parent = a.find_parent(["article", "div", "li", "section"])
-        if parent:
-          h = parent.find(["h1", "h2", "h3", "h4"])
-          if h:
-            title = h.get_text(" ", strip=True)
-      if len(title) > 22 and len(href) > 15:
-        url = (
-            href
-            if href.startswith("http")
-            else "https://www.swiss-ski.ch/" + href.lstrip("/")
-        )
-        articles.append(("Swiss-Ski (SUI)", title, url))
+  # 1. Próba przez oficjalną sitemapę XML Swiss-Ski (omija RODO i JS, zawiera wszystkie najnowsze newsy)
+  try:
+    res = requests.get(
+        "https://www.swiss-ski.ch/sitemap.xml",
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=15,
+    )
+    if res.status_code == 200:
+      # Szukamy sub-sitemap lub bezpośrednich linków z newsami ze skoków
+      sub_sitemaps = re.findall(
+          r"<loc>(https://www\.swiss-ski\.ch/[^<]*sitemap[^<]*)</loc>", res.text
+      )
+      urls_to_scan = [res.text]
+      for sm in sub_sitemaps[:5]:
+        r = requests.get(sm, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+        if r.status_code == 200:
+          urls_to_scan.append(r.text)
 
-    if not articles:
-      sample = [a.get("href") for a in soup.find_all("a", href=True)[:8]]
-      print(f"   🔎 Debug Swiss-Ski linki: {sample}")
+      for xml_text in urls_to_scan:
+        for loc in re.findall(
+            r"<loc>(https://www\.swiss-ski\.ch/skispringen/news/[^<]+)</loc>",
+            xml_text,
+        ):
+          if loc.rstrip("/").endswith("/news"):
+            continue
+          slug = loc.rstrip("/").split("/")[-1]
+          title = slug.replace("-", " ").capitalize()
+          articles.append(("Swiss-Ski (SUI)", title, loc))
+  except Exception as e:
+    print(f"❌ Swiss-Ski sitemap błąd: {e}")
+
+  # 2. Jeśli sitemapa nie zwróciła wyników, używamy Playwrighta z obejściem Shadow DOM Usercentrics
+  if not articles:
+    try:
+      page.goto(
+          "https://www.swiss-ski.ch/skispringen/news/",
+          wait_until="networkidle",
+          timeout=35000,
+      )
+      page.wait_for_timeout(2000)
+      # Klikamy przycisk w Shadow DOM (#usercentrics-root) przez JS
+      page.evaluate("""() => {
+        const root = document.querySelector('#usercentrics-root');
+        if (root && root.shadowRoot) {
+          const btns = root.shadowRoot.querySelectorAll('button');
+          for (const b of btns) {
+            if (b.innerText && (b.innerText.includes('akzeptieren') || b.innerText.includes('Accept'))) {
+              b.click();
+              break;
+            }
+          }
+        }
+      }""")
+      page.wait_for_timeout(3000)
+      page.mouse.wheel(0, 2000)
+      page.wait_for_timeout(3000)
+      soup = BeautifulSoup(page.content(), "html.parser")
+      for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "/skispringen/news/" in href and not href.rstrip("/").endswith("/news"):
+          title = a.get_text(" ", strip=True)
+          parent = a.find_parent(["article", "div", "li"])
+          if len(title) < 15 and parent:
+            h = parent.find(["h1", "h2", "h3", "h4"])
+            if h:
+              title = h.get_text(" ", strip=True)
+          if len(title) > 15:
+            url = (
+                href
+                if href.startswith("http")
+                else "https://www.swiss-ski.ch/" + href.lstrip("/")
+            )
+            articles.append(("Swiss-Ski (SUI)", title, url))
+    except Exception as e:
+      print(f"❌ Swiss-Ski Playwright błąd: {e}")
 
   print(f"✅ [Swiss-Ski] Znaleziono: {len(articles)}")
   return articles
